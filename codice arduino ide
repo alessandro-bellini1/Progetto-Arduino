@@ -1,0 +1,173 @@
+#include <Servo.h>
+#define PIN_SERVO 8
+#define DATA_PIN 12
+#define LATCH_PIN 11
+#define CLOCK_PIN 5
+
+Servo Servo;
+const int triggerPort = 10; // Pin per il trigger/ricevitore del sensore ad ultrasuoni
+const int echoPort = 9;     // Pin per il trasmettitore del sensore ad ultrasuoni
+const int ledRosso = 3;     // Pin per il LED rosso per indicare che il sensore ad ultrasuoni ha rilevato oggetti
+const int ledVerde = 6;     // Pin per il LED verde per indicare che il sensore ad ultrasuoni è spento
+const int led = 2;          // Pin per il LED bianco che si accende collegato al fotoresistore per far luce
+const int FAN_PIN = 7;      // Pin collegato alla ventola
+/*
+primo bit = led E
+secondo bit = D
+terzo bit = F
+quarto bit = led A
+quinto bit = led B
+sesto bit = led C
+settimo bit = led H
+ottavo bit = led G
+*/
+byte numbers[] = {
+  B11111100,  // 0
+  B00001100,  // 1
+  B11011001,  // 2
+  B01011101,  // 3
+  B00101101,  // 4
+  B01110101,  // 5
+  B11110101,  // 6
+  B00011100,  // 7
+  B11111101,  // 8
+  B01111101   // 9
+};
+
+int n = 0;                   // Conto alla rovescia
+int pos = 90;                // Posizione iniziale del servo
+
+unsigned long previousMillis = 0; // Tempo precedente per il conto alla rovescia
+unsigned long fanStartMillis = 0; // Tempo di avvio della ventola
+unsigned long t1, dt;
+const unsigned long countdownInterval = 1000; // Intervallo di 1 secondo
+const unsigned long fanDuration = 5000;      // Durata della ventola: 5 secondi
+const int luminositaSoglia = 400;            // Soglia per passare alla modalità manuale
+int tblink = 100;
+int statoled = LOW;
+int freq = 220;
+bool fanActive = false; // Stato della ventola
+
+void setup() {
+  pinMode(DATA_PIN, OUTPUT);
+  pinMode(LATCH_PIN, OUTPUT);
+  pinMode(CLOCK_PIN, OUTPUT);
+  pinMode(FAN_PIN, OUTPUT);
+  Servo.attach(PIN_SERVO);
+  Servo.write(pos); // Posizione iniziale
+  pinMode(led, OUTPUT);
+  pinMode(triggerPort, OUTPUT);
+  pinMode(echoPort, INPUT);
+  pinMode(ledRosso, OUTPUT);
+  pinMode(ledVerde, OUTPUT);
+  Serial.begin(9600);
+}
+
+void loop() {
+
+  // Leggi la luminosità dal sensore
+  int luminosita = analogRead(A0);
+
+  if (luminosita > luminositaSoglia) {
+    Servo.write(pos);
+    digitalWrite(led, LOW);
+    digitalWrite(ledRosso, LOW);
+    digitalWrite(ledVerde, HIGH);
+  } else {
+    manovraAutomatica();
+  }
+}
+
+void manovraAutomatica() {
+  digitalWrite(ledVerde, LOW);
+  digitalWrite(led, HIGH);
+  digitalWrite(ledRosso, HIGH);
+
+  for (int i = 45; i <= 135; i++) {
+    Servo.write(i);
+    delay(20);
+    manovraDistanza();
+  }
+
+  for (int i = 135; i >= 45; i--) {
+    Servo.write(i);
+    delay(20);
+    manovraDistanza();
+  }
+}
+
+void manovraDistanza() {
+  long distanza = misura();
+
+  if (distanza < 5) {
+    digitalWrite(ledRosso, HIGH); // Accendi ledRadar
+    tone(4, 100, 100);
+    startCountdown(); // Avvia conto alla rovescia
+  } else if (distanza > 30) {
+    n = 9;
+    writeRegister(numbers[n]);
+    digitalWrite(ledRosso, LOW); // Spegni ledRadar
+    digitalWrite(ledVerde, HIGH);
+    noTone(4);
+  } else {
+    digitalWrite(ledVerde, LOW);
+    tblink = map(distanza, 5, 40, 30, 300);
+    freq = map(distanza, 5, 40, 500, 220);
+    dt = millis() - t1;
+
+    if (dt >= tblink) {
+      statoled = !statoled;
+      t1 = millis();
+      if (statoled) {
+        tone(4, freq, 100);
+        digitalWrite(ledRosso, HIGH);
+        startCountdown(); // Avvia conto alla rovescia
+      } else {
+        noTone(4);
+        digitalWrite(ledRosso, LOW);
+      }
+    }
+  }
+}
+
+void startCountdown() {
+  unsigned long currentMillis = millis();
+  if (fanActive) {
+    if (currentMillis - fanStartMillis >= fanDuration) {
+      digitalWrite(FAN_PIN, LOW);
+      fanActive = false;
+    }
+  } else {
+    if (currentMillis - previousMillis >= countdownInterval) {
+      previousMillis = currentMillis;
+      n = (n - 1 + 10) % 10;
+      writeRegister(numbers[n]);
+
+      if (n == 0) {
+        digitalWrite(FAN_PIN, HIGH);
+        fanActive = true;
+        delay(5000);
+        digitalWrite(FAN_PIN, LOW);
+        fanActive = false;
+        fanStartMillis = currentMillis;
+      }
+    }
+  }
+}
+
+void writeRegister(byte value) {
+  digitalWrite(LATCH_PIN, LOW);
+  shiftOut(DATA_PIN, CLOCK_PIN, MSBFIRST, value);
+  digitalWrite(LATCH_PIN, HIGH);
+}
+
+long misura() {
+  digitalWrite(triggerPort, LOW);
+  delayMicroseconds(2);
+  digitalWrite(triggerPort, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(triggerPort, LOW);
+
+  long durata = pulseIn(echoPort, HIGH);
+  return 0.034 * durata / 2;
+}
